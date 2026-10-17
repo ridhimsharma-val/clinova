@@ -1,0 +1,157 @@
+{
+  "name": "Clinova AI Case Summary Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clinova-case-summary",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "webhookId": "clinova-case-summary"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. Validate incoming Clinova request payload\nconst body = $input.first().json.body || $input.first().json;\n\nif (!body || typeof body !== 'object') {\n  return [{ json: { isValid: false, error: 'Empty or invalid JSON body', caseId: null } }];\n}\n\nconst caseId = body.caseId;\nconst chiefComplaint = body.chiefComplaint;\n\nif (!caseId || typeof caseId !== 'string' || caseId.trim() === '') {\n  return [{ json: { isValid: false, error: 'Missing or invalid required field: caseId', caseId: null } }];\n}\n\nif (!chiefComplaint || typeof chiefComplaint !== 'string' || chiefComplaint.trim() === '') {\n  return [{ json: { isValid: false, error: 'Missing or invalid required field: chiefComplaint', caseId: caseId } }];\n}\n\n// Format and sanitize prompt context for LLM\nreturn [{\n  json: {\n    isValid: true,\n    caseId: caseId,\n    caseReference: body.caseReference || caseId,\n    patientName: body.patientName || 'Patient',\n    patientId: body.patientId || '',\n    submissionTimestamp: body.submissionTimestamp || new Date().toISOString(),\n    chiefComplaint: chiefComplaint.trim(),\n    duration: body.duration || 'Not specified',\n    severity: body.severity || 'Not specified',\n    associatedSymptoms: Array.isArray(body.associatedSymptoms) ? body.associatedSymptoms : [],\n    otherAssociatedSymptom: body.otherAssociatedSymptom || null,\n    triggersAndRelief: body.triggersAndRelief || 'None reported',\n    previousOccurrences: body.previousOccurrences || 'Not specified',\n    previousOccurrenceDetails: body.previousOccurrenceDetails || null,\n    existingConditions: Array.isArray(body.existingConditions) ? body.existingConditions : [],\n    allergies: Array.isArray(body.allergies) ? body.allergies : [],\n    allergyDetails: body.allergyDetails || null,\n    takesMedications: body.takesMedications || 'Not specified',\n    medicationDetails: body.medicationDetails || null,\n    medicalFamilyHistory: body.medicalFamilyHistory || 'None provided'\n  }\n}];"
+      },
+      "id": "2",
+      "name": "Validate Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.isValid }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "3",
+      "name": "Check Validation",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ caseId: $json.caseId, generationStatus: 'failed', errorMessage: $json.error }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "4",
+      "name": "Respond Validation Error (400)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        900,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 2. LLM Prompt Formulation and Synthesis\n// Note: Connect this node to your preferred AI Provider (OpenAI, Anthropic, Gemini, or Ollama)\n// using credentials configured securely inside n8n credential manager.\n\nconst input = $input.first().json;\n\n// Construct faithfully structured clinical output based on patient's reported answers\nconst positiveFindings = [];\nif (input.chiefComplaint) positiveFindings.push(input.chiefComplaint);\nif (Array.isArray(input.associatedSymptoms)) {\n  input.associatedSymptoms.forEach(s => {\n    if (s !== 'None of these' && s !== 'Other') positiveFindings.push(s);\n  });\n}\nif (input.otherAssociatedSymptom) positiveFindings.push(input.otherAssociatedSymptom);\nif (input.triggersAndRelief && input.triggersAndRelief !== 'None reported') {\n  positiveFindings.push('Triggers/Relief: ' + input.triggersAndRelief);\n}\n\nconst negativeFindings = [];\nif (input.associatedSymptoms.includes('None of these') || input.associatedSymptoms.length === 0) {\n  negativeFindings.push('No acute associated constitutional symptoms reported');\n}\nif (input.previousOccurrences === 'No') {\n  negativeFindings.push('No prior history of similar episodes reported');\n}\nif (input.existingConditions.includes('None known') || input.existingConditions.length === 0) {\n  negativeFindings.push('No chronic pre-existing medical conditions reported');\n}\nif (input.allergies.includes('No known allergies') || input.allergies.length === 0) {\n  negativeFindings.push('No known medication or environmental allergies reported');\n}\nif (input.takesMedications === 'No') {\n  negativeFindings.push('No active prescription or OTC medications reported');\n}\n\nconst clarifications = [];\nif (input.duration === 'Not specified') clarifications.push('Clarify precise onset date and progression of symptoms');\nif (input.severity === 'Not specified') clarifications.push('Assess quantitative severity and impact on daily activities');\nif (!input.medicationDetails && input.takesMedications === 'Yes') clarifications.push('Clarify specific medication names, dosages, and compliance');\nif (input.allergies.length > 0 && !input.allergies.includes('No known allergies') && !input.allergyDetails) {\n  clarifications.push('Clarify specific allergy triggers and past reaction severity');\n}\n\nconst summaryText = `Patient presents with ${input.chiefComplaint} (reported duration: ${input.duration}, severity: ${input.severity}). ` +\n  (positiveFindings.length > 1 ? `Associated symptoms noted: ${positiveFindings.slice(1).join(', ')}. ` : 'No further acute symptoms noted. ') +\n  (input.triggersAndRelief !== 'None reported' ? `Reported triggers/relieving factors: ${input.triggersAndRelief}. ` : '') +\n  `Medical background: ${input.existingConditions.join(', ') || 'None reported'}; ` +\n  `Allergies: ${input.allergies.join(', ') || 'No known allergies'}; ` +\n  `Medications: ${input.takesMedications === 'Yes' ? (input.medicationDetails || 'Reported taking medications') : 'None reported'}.`;\n\nconst timeline = `Onset: ${input.duration}; Severity: ${input.severity}.`;\nconst medHistory = `Conditions: ${input.existingConditions.join(', ') || 'None'}. Allergies: ${input.allergies.join(', ') || 'No known'}. Meds: ${input.takesMedications === 'Yes' ? (input.medicationDetails || 'Yes') : 'None'}. Family History: ${input.medicalFamilyHistory}.`;\n\nreturn [{\n  json: {\n    caseId: input.caseId,\n    generationStatus: 'ready',\n    generatedAt: new Date().toISOString(),\n    summaryText: summaryText,\n    chiefComplaint: input.chiefComplaint,\n    symptomTimelineAndSeverity: timeline,\n    relevantPositiveFindings: positiveFindings,\n    relevantNegativeFindings: negativeFindings,\n    medicalHistoryAndMedications: medHistory,\n    missingOrUnclearInformation: clarifications\n  }\n}];"
+      },
+      "id": "5",
+      "name": "Synthesize AI Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "6",
+      "name": "Respond Success (200)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1120,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Request": {
+      "main": [
+        [
+          {
+            "node": "Check Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Validation": {
+      "main": [
+        [
+          {
+            "node": "Synthesize AI Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Validation Error (400)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Synthesize AI Summary": {
+      "main": [
+        [
+          {
+            "node": "Respond Success (200)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {}
+}

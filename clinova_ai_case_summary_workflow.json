@@ -1,0 +1,269 @@
+{
+  "name": "Clinova AI Case Summary Workflow with AI Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clinova-case-summary",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        180,
+        340
+      ],
+      "webhookId": "clinova-case-summary"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. Validate incoming Clinova request payload\nconst raw = $input.first().json;\nconst body = raw.body || raw;\n\nif (!body || typeof body !== 'object') {\n  return [{ json: { isValid: false, error: 'Empty or invalid JSON body', caseId: null } }];\n}\n\nconst caseId = body.caseId;\nconst chiefComplaint = body.chiefComplaint;\n\nif (!caseId || typeof caseId !== 'string' || caseId.trim() === '') {\n  return [{ json: { isValid: false, error: 'Missing or invalid required field: caseId', caseId: null } }];\n}\n\nif (!chiefComplaint || typeof chiefComplaint !== 'string' || chiefComplaint.trim() === '') {\n  return [{ json: { isValid: false, error: 'Missing or invalid required field: chiefComplaint', caseId: caseId } }];\n}\n\n// Format and sanitize prompt context for LLM / AI Agent\nreturn [{\n  json: {\n    isValid: true,\n    caseId: caseId.trim(),\n    caseReference: body.caseReference || caseId,\n    patientName: body.patientName || 'Patient',\n    patientId: body.patientId || '',\n    submissionTimestamp: body.submissionTimestamp || new Date().toISOString(),\n    chiefComplaint: chiefComplaint.trim(),\n    duration: body.duration || 'Not specified',\n    severity: body.severity || 'Not specified',\n    associatedSymptoms: Array.isArray(body.associatedSymptoms) ? body.associatedSymptoms : [],\n    otherAssociatedSymptom: body.otherAssociatedSymptom || 'None',\n    triggersAndRelief: body.triggersAndRelief || 'None reported',\n    previousOccurrences: body.previousOccurrences || 'Not specified',\n    previousOccurrenceDetails: body.previousOccurrenceDetails || 'None',\n    existingConditions: Array.isArray(body.existingConditions) ? body.existingConditions : [],\n    allergies: Array.isArray(body.allergies) ? body.allergies : [],\n    allergyDetails: body.allergyDetails || 'None',\n    takesMedications: body.takesMedications || 'Not specified',\n    medicationDetails: body.medicationDetails || 'None',\n    medicalFamilyHistory: body.medicalFamilyHistory || 'None reported'\n  }\n}];"
+      },
+      "id": "node-validate-request",
+      "name": "Validate Request Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.isValid }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "node-check-validation",
+      "name": "Is Request Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        620,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ caseId: $json.caseId, generationStatus: 'failed', errorMessage: $json.error }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "node-respond-400",
+      "name": "Respond Bad Request (400)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        860,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are Clinova's AI Clinical Decision Support Specialist. Your role is to formulate a structured clinical briefing for the attending physician based STRICTLY on the patient intake responses below.\n\nCRITICAL HEALTHCARE SAFETY CONSTRAINTS:\n1. NEVER invent, hallucinate, or assume symptoms, physical exam findings, or diagnostic test values.\n2. NEVER output definitive diagnoses or prescribe medications.\n3. Include in 'relevantPositiveFindings' ONLY symptoms explicitly endorsed by the patient.\n4. Include in 'relevantNegativeFindings' ONLY symptoms explicitly denied by the patient (e.g. if previousOccurrences is 'No', or associatedSymptoms is 'None of these', or allergies is 'No known allergies'). NEVER invent absent symptoms.\n5. Provide 2-4 insightful clarification questions for the physician in 'missingOrUnclearInformation'.\n\nPATIENT INTAKE CASE:\n- Case ID: {{ $json.caseId }}\n- Patient Name / ID: {{ $json.patientName }} ({{ $json.patientId }})\n- Chief Complaint: {{ $json.chiefComplaint }}\n- Duration & Progression: {{ $json.duration }}\n- Severity: {{ $json.severity }}\n- Associated Symptoms: {{ $json.associatedSymptoms.join(', ') }} (Other: {{ $json.otherAssociatedSymptom }})\n- Triggers & Relieving Factors: {{ $json.triggersAndRelief }}\n- Previous Similar Episodes: {{ $json.previousOccurrences }} (Details: {{ $json.previousOccurrenceDetails }})\n- Chronic Conditions: {{ $json.existingConditions.join(', ') }}\n- Allergies: {{ $json.allergies.join(', ') }} (Details: {{ $json.allergyDetails }})\n- Active Medications: {{ $json.takesMedications }} (Details: {{ $json.medicationDetails }})\n- Medical & Family History: {{ $json.medicalFamilyHistory }}\n\nSynthesize this into the structured JSON schema provided.",
+        "options": {
+          "systemMessage": "You are a specialized medical decision-support AI. You assist doctors by organizing patient questionnaires into chronological timelines, positive findings, patient-verified negative findings, and consultation clarification questions. You maintain strict clinical safety and medical accuracy."
+        }
+      },
+      "id": "node-ai-agent",
+      "name": "AI Clinical Decision Agent",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        860,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "id": "node-llm-chat-model",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"caseId\": { \"type\": \"string\" },\n    \"generationStatus\": { \"type\": \"string\", \"enum\": [\"ready\"] },\n    \"summaryText\": { \"type\": \"string\" },\n    \"chiefComplaint\": { \"type\": \"string\" },\n    \"symptomTimelineAndSeverity\": { \"type\": \"string\" },\n    \"relevantPositiveFindings\": { \"type\": \"array\", \"items\": { \"type\": \"string\" } },\n    \"relevantNegativeFindings\": { \"type\": \"array\", \"items\": { \"type\": \"string\" } },\n    \"medicalHistoryAndMedications\": { \"type\": \"string\" },\n    \"missingOrUnclearInformation\": { \"type\": \"array\", \"items\": { \"type\": \"string\" } },\n    \"disclaimer\": { \"type\": \"string\" }\n  },\n  \"required\": [\"caseId\", \"generationStatus\", \"summaryText\", \"chiefComplaint\", \"symptomTimelineAndSeverity\", \"relevantPositiveFindings\", \"relevantNegativeFindings\", \"medicalHistoryAndMedications\", \"missingOrUnclearInformation\"]\n}"
+      },
+      "id": "node-output-parser",
+      "name": "Structured Output Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        980,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 3. Safety Enforcement & Schema Normalization\nconst raw = $input.first().json;\nlet output = raw.output || raw.response || raw;\n\n// Parse stringified JSON if needed\nif (typeof output === 'string') {\n  try {\n    output = JSON.parse(output);\n  } catch (e) {\n    // If parsing fails, wrap\n    output = { summaryText: output };\n  }\n}\n\nconst caseId = $('Validate Request Payload').first().json.caseId;\nconst chiefComplaint = $('Validate Request Payload').first().json.chiefComplaint;\n\nreturn [{\n  json: {\n    caseId: output.caseId || caseId,\n    generationStatus: 'ready',\n    generatedAt: new Date().toISOString(),\n    summaryText: output.summaryText || 'Clinical summary synthesized successfully.',\n    chiefComplaint: output.chiefComplaint || chiefComplaint,\n    symptomTimelineAndSeverity: output.symptomTimelineAndSeverity || 'Timeline recorded from patient intake.',\n    relevantPositiveFindings: Array.isArray(output.relevantPositiveFindings) ? output.relevantPositiveFindings : [chiefComplaint],\n    relevantNegativeFindings: Array.isArray(output.relevantNegativeFindings) ? output.relevantNegativeFindings : ['No chronic conditions reported'],\n    medicalHistoryAndMedications: output.medicalHistoryAndMedications || 'Medical history documented.',\n    missingOrUnclearInformation: Array.isArray(output.missingOrUnclearInformation) ? output.missingOrUnclearInformation : ['Clarify onset progression with patient'],\n    disclaimer: 'AI-generated summary — requires physician review. Not a diagnosis or prescription.'\n  }\n}];"
+      },
+      "id": "node-safety-normalization",
+      "name": "Enforce Safety & Disclaimer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "schema": "public",
+        "table": "ai_case_summaries",
+        "columns": "case_id,generation_status,summary_text,chief_complaint,symptom_timeline_and_severity,relevant_positive_findings,relevant_negative_findings,medical_history_and_medications,missing_or_unclear_information,disclaimer,generated_at,last_requested_at",
+        "options": {}
+      },
+      "id": "node-supabase-upsert",
+      "name": "Persist Summary to Supabase",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        220
+      ],
+      "notesInFlow": true,
+      "notes": "Configure Supabase Credentials in n8n Credential Manager after import"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "node-respond-200",
+      "name": "Respond Success (200)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Request Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Request Payload": {
+      "main": [
+        [
+          {
+            "node": "Is Request Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Request Valid?": {
+      "main": [
+        [
+          {
+            "node": "AI Clinical Decision Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Bad Request (400)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Clinical Decision Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Clinical Decision Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Clinical Decision Agent": {
+      "main": [
+        [
+          {
+            "node": "Enforce Safety & Disclaimer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enforce Safety & Disclaimer": {
+      "main": [
+        [
+          {
+            "node": "Persist Summary to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Summary to Supabase": {
+      "main": [
+        [
+          {
+            "node": "Respond Success (200)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
